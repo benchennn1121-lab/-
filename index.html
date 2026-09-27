@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>远程前置摄像头（知情同意版）</title>
+  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #111;
+      color: #fff;
+      padding: 16px;
+      min-height: 100vh;
+    }
+    h2 { text-align: center; margin-bottom: 20px; font-size: 1.3rem; }
+    .box {
+      background: #1e1e1e;
+      border-radius: 12px;
+      padding: 16px;
+      margin-bottom: 16px;
+    }
+    input, button {
+      width: 100%;
+      padding: 14px;
+      font-size: 16px;
+      border-radius: 8px;
+      border: none;
+      margin-top: 10px;
+    }
+    input { background: #333; color: #fff; }
+    button {
+      background: #0a84ff;
+      color: white;
+      font-weight: bold;
+      cursor: pointer;
+    }
+    button:active { opacity: 0.8; }
+    button.secondary { background: #333; }
+    #localVideo, #remoteVideo {
+      width: 100%;
+      max-height: 50vh;
+      background: #000;
+      border-radius: 12px;
+      margin-top: 12px;
+      display: none;
+    }
+    .status {
+      text-align: center;
+      color: #aaa;
+      font-size: 14px;
+      margin: 12px 0;
+    }
+    .room-id {
+      font-size: 24px;
+      font-weight: bold;
+      text-align: center;
+      letter-spacing: 2px;
+      color: #0a84ff;
+      margin: 10px 0;
+    }
+  </style>
+</head>
+<body>
+  <h2>远程前置摄像头</h2>
+  <p class="status" id="status">请选择操作</p>
+
+  <div class="box" id="createBox">
+    <button onclick="createRoom()">创建房间（生成房间号）</button>
+    <div id="roomInfo" style="display:none;">
+      <p style="text-align:center; margin-top:12px;">你的房间号：</p>
+      <div class="room-id" id="roomIdDisplay"></div>
+      <p style="text-align:center; font-size:13px; color:#aaa;">把这个号码发给对方</p>
+    </div>
+  </div>
+
+  <div class="box" id="joinBox">
+    <input type="text" id="joinInput" placeholder="输入对方给的房间号" inputmode="numeric">
+    <button onclick="joinRoom()">加入并开启前置摄像头</button>
+  </div>
+
+  <video id="localVideo" autoplay playsinline muted></video>
+  <video id="remoteVideo" autoplay playsinline></video>
+
+  <script>
+    let peer = null;
+    let localStream = null;
+    let currentCall = null;
+
+    const statusEl = document.getElementById('status');
+    const roomIdDisplay = document.getElementById('roomIdDisplay');
+    const roomInfo = document.getElementById('roomInfo');
+    const localVideo = document.getElementById('localVideo');
+    const remoteVideo = document.getElementById('remoteVideo');
+
+    function setStatus(text) {
+      statusEl.textContent = text;
+    }
+
+    // 创建房间（只看对方画面的人）
+    function createRoom() {
+      peer = new Peer();  // 自动生成 ID
+
+      peer.on('open', (id) => {
+        roomIdDisplay.textContent = id;
+        roomInfo.style.display = 'block';
+        setStatus('房间已创建，等待对方加入...');
+      });
+
+      peer.on('call', (call) => {
+        setStatus('对方已加入，正在接收画面...');
+        currentCall = call;
+
+        // 不发送自己的摄像头，只接收
+        call.answer();
+
+        call.on('stream', (remoteStream) => {
+          remoteVideo.srcObject = remoteStream;
+          remoteVideo.style.display = 'block';
+          setStatus('已连接到对方前置摄像头');
+        });
+
+        call.on('close', () => {
+          setStatus('对方已断开');
+          remoteVideo.style.display = 'none';
+        });
+      });
+
+      peer.on('error', (err) => {
+        setStatus('错误: ' + err.type);
+        console.error(err);
+      });
+    }
+
+    // 加入房间并开启前置摄像头（被查看的人）
+    async function joinRoom() {
+      const roomId = document.getElementById('joinInput').value.trim();
+      if (!roomId) {
+        alert('请输入房间号');
+        return;
+      }
+
+      try {
+        // 请求前置摄像头
+        localStream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'user' },  // 强制前置摄像头
+          audio: false
+        });
+
+        localVideo.srcObject = localStream;
+        localVideo.style.display = 'block';
+        setStatus('摄像头已开启，正在连接...');
+
+        peer = new Peer();
+
+        peer.on('open', () => {
+          // 呼叫对方
+          const call = peer.call(roomId, localStream);
+          currentCall = call;
+
+          call.on('stream', (remoteStream) => {
+            // 如果对方也开了摄像头，可以在这里显示（目前不需要）
+          });
+
+          call.on('close', () => {
+            setStatus('连接已断开');
+          });
+
+          setStatus('已连接到对方，正在发送前置摄像头画面');
+        });
+
+        peer.on('error', (err) => {
+          setStatus('连接失败: ' + err.type);
+          console.error(err);
+        });
+
+      } catch (err) {
+        console.error(err);
+        setStatus('无法开启摄像头，请检查权限');
+        alert('请允许浏览器使用摄像头权限');
+      }
+    }
+
+    // 页面关闭时清理
+    window.addEventListener('beforeunload', () => {
+      if (localStream) {
+        localStream.getTracks().forEach(track => track.stop());
+      }
+      if (currentCall) currentCall.close();
+      if (peer) peer.destroy();
+    });
+  </script>
+</body>
+</html>
